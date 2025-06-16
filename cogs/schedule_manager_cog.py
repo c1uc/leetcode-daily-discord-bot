@@ -101,10 +101,7 @@ class ScheduleManagerCog(commands.Cog):
                     
                     target_datetime_today = now_in_target_tz.replace(hour=hour, minute=minute, second=offset_seconds, microsecond=0)
                     
-                    if now_in_target_tz >= target_datetime_today:
-                        target_datetime = target_datetime_today + timedelta(days=1)
-                    else:
-                        target_datetime = target_datetime_today
+                    target_datetime = target_datetime_today + timedelta(days=1) if now_in_target_tz >= target_datetime_today else target_datetime_today
                     
                     target_datetime_utc = target_datetime.astimezone(pytz.UTC)
                     now_utc = datetime.now(pytz.UTC)
