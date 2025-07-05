@@ -4,6 +4,8 @@ from discord import app_commands
 from discord.ext import commands
 import pytz # For timezone validation in set_timezone
 import os   # For os.getenv to get default POST_TIME and TIMEZONE
+import re   # For date format validation
+import time  # For caching submissions with timestamp
 
 # Default values, similar to how they are defined in bot.py or schedule_manager_cog.py
 # These are used for display in show_settings if a server doesn't have specific settings.
@@ -15,9 +17,16 @@ class SlashCommandsCog(commands.Cog):
         self.bot = bot
         self.logger = bot.logger
 
-    @app_commands.command(name="daily", description="取得今天的 LeetCode 每日挑戰 (LCUS)")
-    async def daily_command(self, interaction: discord.Interaction):
-        """Get today's LeetCode daily challenge (LCUS)"""
+    @app_commands.command(name="daily", description="取得 LeetCode 每日挑戰 (LCUS)")
+    @app_commands.describe(date="查詢指定日期的每日挑戰 (YYYY-MM-DD 格式)，不填則為今天")
+    async def daily_command(self, interaction: discord.Interaction, date: str = None):
+        """
+        Get LeetCode daily challenge (LCUS)
+        
+        Args:
+            interaction: Discord interaction object
+            date: Optional date string in YYYY-MM-DD format. If None, returns today's challenge.
+        """
         schedule_cog = self.bot.get_cog("ScheduleManagerCog")
         if not schedule_cog:
             await interaction.response.send_message("排程模組目前無法使用，請稍後再試。", ephemeral=True)
@@ -25,11 +34,39 @@ class SlashCommandsCog(commands.Cog):
             return
         
         await interaction.response.defer(ephemeral=True) # Defer as it involves API calls
-        await schedule_cog.send_daily_challenge(interaction=interaction, domain="com")
+        
+        if date:
+            # Validate date format
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+                await interaction.followup.send("日期格式錯誤，請使用 YYYY-MM-DD 格式（例如：2025-07-01）", ephemeral=True)
+                return
+            
+            try:
+                current_client = self.bot.lcus  # Use LCUS for historical daily challenges
+                challenge_info = await current_client.get_daily_challenge(date_str=date)
+                
+                if not challenge_info:
+                    await interaction.followup.send(f"找不到 {date} 的每日挑戰資料。", ephemeral=True)
+                    return
+                
+                embed = await schedule_cog.create_problem_embed(challenge_info, "com", is_daily=True, date_str=date)
+                view = await schedule_cog.create_problem_view(challenge_info, "com")
+                
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                self.logger.info(f"Sent daily challenge for {date} to user {interaction.user.name}")
+                
+            except ValueError as e:
+                await interaction.followup.send(f"日期錯誤：{e}", ephemeral=True)
+            except Exception as e:
+                self.logger.error(f"Error in daily_command with date {date}: {e}", exc_info=True)
+                await interaction.followup.send(f"查詢每日挑戰時發生錯誤：{e}", ephemeral=True)
+        else:
+            await schedule_cog.send_daily_challenge(interaction=interaction, domain="com")
 
-    @app_commands.command(name="daily_cn", description="取得今天的 LeetCode 每日挑戰 (LCCN)")
-    async def daily_cn_command(self, interaction: discord.Interaction):
-        """Get today's LeetCode daily challenge (LCCN)"""
+    @app_commands.command(name="daily_cn", description="取得 LeetCode 每日挑戰 (LCCN)")
+    @app_commands.describe(date="查詢指定日期的每日挑戰 (YYYY-MM-DD 格式)，不填則為今天")
+    async def daily_cn_command(self, interaction: discord.Interaction, date: str = None):
+        """Get LeetCode daily challenge (LCCN)"""
         schedule_cog = self.bot.get_cog("ScheduleManagerCog")
         if not schedule_cog:
             await interaction.response.send_message("排程模組目前無法使用，請稍後再試。", ephemeral=True)
@@ -37,7 +74,88 @@ class SlashCommandsCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True) # Defer as it involves API calls
-        await schedule_cog.send_daily_challenge(interaction=interaction, domain="cn")
+        
+        if date:
+            # Validate date format
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+                await interaction.followup.send("日期格式錯誤，請使用 YYYY-MM-DD 格式（例如：2024-01-15）", ephemeral=True)
+                return
+            
+            try:
+                current_client = self.bot.lccn  # Use LCCN for historical daily challenges
+                challenge_info = await current_client.get_daily_challenge(date_str=date)
+                
+                if not challenge_info:
+                    await interaction.followup.send(f"找不到 {date} 的每日挑戰資料。", ephemeral=True)
+                    return
+                
+                embed = await schedule_cog.create_problem_embed(challenge_info, "cn", is_daily=True, date_str=date)
+                view = await schedule_cog.create_problem_view(challenge_info, "cn")
+                
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                self.logger.info(f"Sent daily challenge for {date} (CN) to user {interaction.user.name}")
+                
+            except ValueError as e:
+                await interaction.followup.send(f"日期錯誤：{e}", ephemeral=True)
+            except Exception as e:
+                self.logger.error(f"Error in daily_cn_command with date {date}: {e}", exc_info=True)
+                await interaction.followup.send(f"查詢每日挑戰時發生錯誤：{e}", ephemeral=True)
+        else:
+            await schedule_cog.send_daily_challenge(interaction=interaction, domain="cn")
+
+    @app_commands.command(name="problem", description="根據題號查詢 LeetCode 題目資訊")
+    @app_commands.describe(problem_id="題目編號 (1-3500+)", domain="選擇 LeetCode 網域")
+    async def problem_command(self, interaction: discord.Interaction, problem_id: int, domain: str = "com"):
+        """
+        Get LeetCode problem information by problem ID
+        
+        Args:
+            interaction: Discord interaction object
+            problem_id: LeetCode problem ID (positive integer)
+            domain: LeetCode domain ('com' or 'cn'), defaults to 'com'
+        """
+        if domain not in ["com", "cn"]:
+            await interaction.response.send_message("網域參數只能是 'com' 或 'cn'", ephemeral=True)
+            return
+            
+        if problem_id < 1:
+            await interaction.response.send_message("題目編號必須是正整數", ephemeral=True)
+            return
+            
+        if problem_id > 4000:  # Add upper bound validation
+            await interaction.response.send_message("題目編號超出範圍，請輸入 1-4000 之間的數字", ephemeral=True)
+            return
+        
+        schedule_cog = self.bot.get_cog("ScheduleManagerCog")
+        if not schedule_cog:
+            await interaction.response.send_message("排程模組目前無法使用，請稍後再試。", ephemeral=True)
+            self.logger.error("ScheduleManagerCog not found when trying to execute /problem command.")
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            current_client = self.bot.lcus if domain == "com" else self.bot.lccn
+            problem_info = await current_client.get_problem(problem_id=str(problem_id))
+            
+            if not problem_info:
+                await interaction.followup.send(f"找不到題目 {problem_id}，請確認題目編號是否正確或是否為公開題目。", ephemeral=True)
+                return
+            
+            embed = await schedule_cog.create_problem_embed(problem_info, domain, is_daily=False)
+            view = await schedule_cog.create_problem_view(problem_info, domain)
+            
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            self.logger.info(f"Sent problem {problem_id} info to user {interaction.user.name}")
+            
+        except Exception as e:
+            self.logger.error(f"Error in problem_command: {e}", exc_info=True)
+            await interaction.followup.send(f"查詢題目時發生錯誤：{e}", ephemeral=True)
+
+    @problem_command.autocomplete('domain')
+    async def problem_domain_autocomplete(self, interaction: discord.Interaction, current: str):
+        domains = ["com", "cn"]
+        return [app_commands.Choice(name=domain, value=domain) for domain in domains if current.lower() in domain.lower()]
 
     @app_commands.command(name="set_channel", description="設定 LeetCode 每日挑戰的發送頻道")
     @app_commands.guild_only()
@@ -223,6 +341,166 @@ class SlashCommandsCog(commands.Cog):
         embed.add_field(name="發送時間", value=f"{post_time} ({timezone})", inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="recent", description="查看 LeetCode 使用者的近期解題紀錄 (僅限 LCUS)")
+    @app_commands.describe(username="LeetCode 使用者名稱", limit="顯示的題目數量 (預設 20，最多 50)")
+    async def recent_command(self, interaction: discord.Interaction, username: str, limit: int = 20):
+        """
+        View recent accepted submissions for a LeetCode user (LCUS only)
+        
+        Args:
+            interaction: Discord interaction object
+            username: LeetCode username
+            limit: Number of submissions to show (default 20, max 50)
+        """
+        # Validate limit
+        if limit < 1:
+            await interaction.response.send_message("顯示數量必須至少為 1", ephemeral=True)
+            return
+        if limit > 50:
+            limit = 50
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Fetch user submissions
+            submissions = await self.bot.lcus.fetch_recent_ac_submissions(username, limit)
+            
+            if not submissions:
+                await interaction.followup.send(f"找不到使用者 **{username}** 的解題紀錄，請確認使用者名稱是否正確。", ephemeral=True)
+                return
+            
+            # Create initial embed for the first submission
+            current_page = 0
+            
+            # Get detailed info for the first submission
+            first_submission = await self._get_submission_details(submissions[current_page])
+            if not first_submission:
+                await interaction.followup.send("無法載入題目詳細資訊", ephemeral=True)
+                return
+                
+            embed = self._create_submission_embed(first_submission, current_page, len(submissions), username)
+            view = self._create_submission_view(first_submission, current_page, username, len(submissions))
+            
+            # Cache submissions in interaction handler for navigation
+            interaction_cog = self.bot.get_cog("InteractionHandlerCog")
+            if interaction_cog:
+                cache_key = f"{username}_{interaction.user.id}"
+                interaction_cog.submissions_cache[cache_key] = (submissions, time.time(), limit)
+            
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            self.logger.info(f"Sent user submissions for {username} to {interaction.user.name}")
+            
+        except Exception as e:
+            self.logger.error(f"Error in recent_command: {e}", exc_info=True)
+            await interaction.followup.send(f"查詢解題紀錄時發生錯誤：{e}", ephemeral=True)
+    
+    async def _get_submission_details(self, basic_submission: dict) -> dict:
+        """Get detailed problem information for a submission"""
+        try:
+            problem = await self.bot.lcus.get_problem(slug=basic_submission['slug'])
+            if problem:
+                return {
+                    'id': problem['id'],
+                    'title': problem['title'],
+                    'slug': basic_submission['slug'],
+                    'link': problem['link'],
+                    'difficulty': problem['difficulty'],
+                    'rating': problem.get('rating', 0),
+                    'tags': problem.get('tags', []),
+                    'ac_rate': problem.get('ac_rate', 0),
+                    'submission_time': basic_submission['submission_time'],
+                    'submission_id': basic_submission['submission_id']
+                }
+        except Exception as e:
+            self.logger.error(f"Error getting submission details: {e}", exc_info=True)
+        return None
+    
+    def _create_submission_embed(self, submission: dict, page: int, total: int, username: str) -> discord.Embed:
+        """Create an embed for a single submission"""
+        color_map = {'Easy': 0x00FF00, 'Medium': 0xFFA500, 'Hard': 0xFF0000}
+        emoji_map = {'Easy': '🟢', 'Medium': '🟡', 'Hard': '🔴'}
+        
+        embed_color = color_map.get(submission['difficulty'], 0x0099FF)
+        difficulty_emoji = emoji_map.get(submission['difficulty'], '')
+        
+        embed = discord.Embed(
+            title=f"{difficulty_emoji} {submission['id']}. {submission['title']}",
+            url=submission['link'],
+            color=embed_color,
+            description=f"**Submission Time:** {submission['submission_time']}"
+        )
+        
+        embed.add_field(name="🔥 Difficulty", value=f"**{submission['difficulty']}**", inline=True)
+        if submission.get('rating') and submission['rating'] > 0:
+            embed.add_field(name="⭐ Rating", value=f"**{round(submission['rating'])}**", inline=True)
+        if submission.get('ac_rate'):
+            embed.add_field(name="📈 AC Rate", value=f"**{round(submission['ac_rate'], 2)}%**", inline=True)
+            
+        if submission.get('tags'):
+            tags_str = ", ".join([f"||`{tag}`||" for tag in submission['tags'][:5]])  # Limit tags to avoid too long
+            embed.add_field(name="🏷️ Tags", value=tags_str, inline=False)
+        
+        embed.set_author(name=f"{username}'s Recent Submissions", icon_url="https://leetcode.com/static/images/LeetCode_logo.png")
+        embed.set_footer(text=f"Problem {page + 1} of {total}")
+        
+        return embed
+    
+    def _create_submission_view(self, submission: dict, current_page: int, username: str, total_submissions: int = None) -> discord.ui.View:
+        """Create a view with navigation buttons for a single submission"""
+        view = discord.ui.View(timeout=None)
+        
+        # Determine if we should show navigation buttons
+        show_nav = total_submissions is None or total_submissions > 1
+        
+        # Add navigation buttons
+        if show_nav:
+            # Previous button (leftmost)
+            prev_button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji="◀️",
+                custom_id=f"user_sub_prev_{username}_{current_page}",
+                disabled=(current_page == 0),
+                row=0
+            )
+            view.add_item(prev_button)
+        
+        # Add problem description button (no label)
+        view.add_item(discord.ui.Button(
+            style=discord.ButtonStyle.primary,
+            emoji="📖",
+            custom_id=f"{self.bot.LEETCODE_DISCRIPTION_BUTTON_PREFIX}{submission['id']}_com",
+            row=0
+        ))
+        
+        # Add optional LLM buttons if available (no labels)
+        if self.bot.llm:
+            view.add_item(discord.ui.Button(
+                style=discord.ButtonStyle.success,
+                emoji="🤖",
+                custom_id=f"{self.bot.LEETCODE_TRANSLATE_BUTTON_PREFIX}{submission['id']}_com",
+                row=0
+            ))
+        if self.bot.llm_pro:
+            view.add_item(discord.ui.Button(
+                style=discord.ButtonStyle.danger,
+                emoji="💡",
+                custom_id=f"{self.bot.LEETCODE_INSPIRE_BUTTON_PREFIX}{submission['id']}_com",
+                row=0
+            ))
+        
+        # Add next button (rightmost)
+        if show_nav and total_submissions:
+            next_button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji="▶️",
+                custom_id=f"user_sub_next_{username}_{current_page}",
+                disabled=(current_page >= total_submissions - 1),
+                row=0
+            )
+            view.add_item(next_button)
+        
+        return view
 
     @app_commands.command(name="remove_channel", description="移除頻道設定，停止在此伺服器發送 LeetCode 每日挑戰")
     @app_commands.guild_only()

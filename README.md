@@ -19,6 +19,11 @@
 - 🌐 **Multi-server Support**: Independent settings for each Discord server
 - 🔔 **Custom Notifications**: Configurable role mentions and channels
 - 🌍 **Timezone Support**: Server-specific timezone settings
+- 📅 **Historical Challenges**: View past daily challenges by date
+- 🔍 **Problem Lookup**: Query any LeetCode problem by ID
+- 📈 **Submission Tracking**: View recent accepted submissions for any user
+- 🤖 **AI-Powered Features**: Optional problem translation and inspiration (requires Gemini API key)
+- 💾 **Smart Caching**: Efficient caching system for better performance
 
 ## 🚀 Quick Start
 
@@ -28,19 +33,64 @@
    cd leetcode-daily-discord-bot
    ```
 
-2. Configure your environment:
+2. Configure your bot:
    ```bash
-   # Copy and edit the environment file
-   mv .env.example .env
+   # Copy and edit the configuration file
+   cp config.toml.example config.toml
+   # Edit config.toml with your settings
+   
+   # Alternative: Use environment variables (.env)
+   cp .env.example .env
    # Edit .env with your Discord bot token
    ```
 
-3. Run the bot:
+3. Run database migration (if upgrading from older version):
+   ```bash
+   # Migrate server settings from settings.db to data.db
+   sqlite3 data/data.db < data/migrate_settings.sql
+   ```
+
+4. Run the bot:
    ```bash
    uv run bot.py
    ```
 
 ## 🛠️ Configuration
+
+### Configuration Methods
+
+The bot supports two configuration methods:
+
+#### 1. TOML Configuration (Recommended)
+
+Create a `config.toml` file from the example:
+
+```toml
+[discord]
+token = "your_discord_bot_token_here"
+
+[llm.gemini]
+api_key = "your_google_gemini_api_key_here"  # Optional, for AI features
+
+[schedule]
+post_time = "00:00"  # Default posting time
+timezone = "UTC"     # Default timezone
+```
+
+See `config.toml.example` for all available options.
+
+#### 2. Environment Variables
+
+For backward compatibility, you can use a `.env` file:
+
+```bash
+DISCORD_TOKEN=your_bot_token_here
+GOOGLE_GEMINI_API_KEY=your_gemini_api_key_here  # Optional
+POST_TIME=00:00  # Optional
+TIMEZONE=UTC     # Optional
+```
+
+**Note**: Environment variables take precedence over `config.toml` settings.
 
 ### Required Bot Permissions
 - `Send Messages`
@@ -51,25 +101,53 @@
 - `Message Content` - Receive message content
   - Note: When the bot joins more than 100 servers, this permission needs to be verified and approved by Discord
 
-### Environment Variables
-```bash
-DISCORD_TOKEN=your_bot_token_here
-```
-
 ## 📝 Usage
 
 ### Slash Commands
 
 | Command | Description | Required Permissions |
 |---------|-------------|---------------------|
-| `/daily` | Display today's LeetCode.com (LCUS) daily challenge | None |
-| `/daily_cn` | Display today's LeetCode.cn (LCCN) daily challenge | None |
-| `/set_channel` | Set notification channel | Manage Channels |
-| `/set_role` | Set role to mention | Manage Roles |
-| `/set_post_time` | Set posting time (HH:MM) | Manage Guild |
-| `/set_timezone` | Set server timezone | Manage Guild |
-| `/show_settings` | Display current settings | None |
+| `/daily [date]` | Display LeetCode.com (LCUS) daily challenge<br>• Optional: YYYY-MM-DD for historical challenges | None |
+| `/daily_cn [date]` | Display LeetCode.cn (LCCN) daily challenge<br>• Optional: YYYY-MM-DD for historical challenges | None |
+| `/problem <id> [domain]` | Query any LeetCode problem by ID<br>• `id`: Problem number (1-4000)<br>• `domain`: com or cn (default: com) | None |
+| `/recent <username> [limit]` | View recent accepted submissions for a user<br>• `username`: LeetCode username (LCUS only)<br>• `limit`: Number of submissions (1-50, default: 20) | None |
+| `/set_channel` | Set notification channel for daily challenges | Manage Channels |
+| `/set_role` | Set role to mention with daily challenges | Manage Roles |
+| `/set_post_time` | Set posting time (HH:MM format) | Manage Guild |
+| `/set_timezone` | Set server timezone for scheduling | Manage Guild |
+| `/show_settings` | Display current server settings | None |
 | `/remove_channel` | Remove channel settings | Manage Channels |
+
+### Command Examples
+
+#### Daily Challenge Commands
+```
+/daily                    # Get today's LeetCode.com challenge
+/daily date:2024-01-15    # Get historical challenge from Jan 15, 2024
+/daily_cn                 # Get today's LeetCode.cn challenge
+/daily_cn date:2024-01-15 # Get historical CN challenge
+```
+
+#### Problem Lookup
+```
+/problem problem_id:1     # Get Two Sum problem from LeetCode.com
+/problem problem_id:1 domain:cn  # Get Two Sum from LeetCode.cn
+```
+
+#### Recent Submissions
+```
+/recent username:alice              # View 20 recent submissions
+/recent username:alice limit:50     # View 50 recent submissions
+```
+
+#### Server Configuration
+```
+/set_channel              # Set current channel for daily notifications
+/set_role                 # Configure role to ping
+/set_post_time time:08:00 # Set daily post time to 8:00 AM
+/set_timezone timezone:America/New_York  # Set timezone
+/show_settings            # View current configuration
+```
 
 ### Server Configuration Steps
 
@@ -83,6 +161,9 @@ DISCORD_TOKEN=your_bot_token_here
 - [x] 🎮 **Enhanced Command Interface**
   - [x] Add slash command prompts
   - [x] Reply in the same channel where slash commands are used
+  - [x] Add `/problem` command for querying problems by ID
+  - [x] Add `/recent` command for viewing user submissions
+  - [x] Support historical daily challenges with date parameter
 - [x] ⚙️ **Advanced Configuration System**
   - [x] Allow admin users to set the configuration
     - [x] Set the channel to post the daily challenge
@@ -106,8 +187,10 @@ DISCORD_TOKEN=your_bot_token_here
 - [x] 🔍 **Large Language Model Integration**
   - [x] Integrate LLM to generate problem translation and inspiration
   - [x] Cache LLM results to improve performance
-- [ ] 📊 **User Engagement Features**
+- [x] 📊 **User Engagement Features**
   - [x] Track submission records of specific users
+  - [x] Interactive navigation for viewing multiple submissions
+  - [x] Paginated display with clean UI
   - [ ] Allow users to configure tracked LeetCode accounts
   - [ ] Implement server-wide submission leaderboards
 - [ ] 🐳 **Containerization Support**
@@ -122,6 +205,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 ## 📦 Dependencies
 
 - [discord.py](https://pypi.org/project/discord.py/) - Discord bot framework
+- [tomli](https://pypi.org/project/tomli/) - TOML parsing for Python < 3.11
 - [python-dotenv](https://pypi.org/project/python-dotenv/) - Environment variable management
 - [requests](https://pypi.org/project/requests/) - HTTP library for API calls
 - [pytz](https://pypi.org/project/pytz/) - Timezone handling
